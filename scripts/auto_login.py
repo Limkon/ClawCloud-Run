@@ -30,33 +30,50 @@ class Telegram:
     def __init__(self):
         self.token = os.environ.get('TG_BOT_TOKEN')
         self.chat_id = os.environ.get('TG_CHAT_ID')
-        self.ok = bool(self.token and self.chat_id)
+        # 修改点：增加初始化日志，明确告知是否配置成功
+        if self.token and self.chat_id:
+            self.ok = True
+            print(f"✅ Telegram 通知已启用 (Chat ID: {self.chat_id})")
+        else:
+            self.ok = False
+            print("⚠️ Telegram 通知未启用 (缺少 TG_BOT_TOKEN 或 TG_CHAT_ID)")
     
     def send(self, msg):
         if not self.ok:
             return
+        # 修改点：移除静默失败，增加错误打印
         try:
-            requests.post(
-                f"https://api.telegram.org/bot{self.token}/sendMessage",
-                data={"chat_id": self.chat_id, "text": msg, "parse_mode": "HTML"},
-                timeout=30
-            )
-        except:
-            pass
+            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+            payload = {"chat_id": self.chat_id, "text": msg, "parse_mode": "HTML"}
+            r = requests.post(url, data=payload, timeout=30)
+            
+            if r.status_code != 200:
+                print(f"❌ Telegram 发送失败 [HTTP {r.status_code}]: {r.text}")
+            else:
+                resp = r.json()
+                if not resp.get("ok"):
+                    print(f"❌ Telegram API 返回错误: {resp.get('description')}")
+        except Exception as e:
+            print(f"❌ Telegram 请求异常: {e}")
     
     def photo(self, path, caption=""):
-        if not self.ok or not os.path.exists(path):
+        if not self.ok:
             return
+        if not os.path.exists(path):
+            print(f"⚠️ 无法发送图片，文件不存在: {path}")
+            return
+        # 修改点：增加图片发送的错误日志
         try:
             with open(path, 'rb') as f:
-                requests.post(
-                    f"https://api.telegram.org/bot{self.token}/sendPhoto",
-                    data={"chat_id": self.chat_id, "caption": caption[:1024]},
-                    files={"photo": f},
-                    timeout=60
-                )
-        except:
-            pass
+                url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
+                payload = {"chat_id": self.chat_id, "caption": caption[:1024]}
+                files = {"photo": f}
+                r = requests.post(url, data=payload, files=files, timeout=60)
+                
+                if r.status_code != 200:
+                    print(f"❌ Telegram 图片发送失败 [HTTP {r.status_code}]: {r.text}")
+        except Exception as e:
+            print(f"❌ Telegram 图片请求异常: {e}")
     
     def flush_updates(self):
         """刷新 offset 到最新，避免读到旧消息"""
@@ -71,8 +88,8 @@ class Telegram:
             data = r.json()
             if data.get("ok") and data.get("result"):
                 return data["result"][-1]["update_id"] + 1
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠️ Telegram flush_updates 异常: {e}")
         return 0
     
     def wait_code(self, timeout=120):
@@ -87,6 +104,8 @@ class Telegram:
         offset = self.flush_updates()
         deadline = time.time() + timeout
         pattern = re.compile(r"^/code\s+(\d{6,8})$")  # 6位TOTP 或 8位恢复码也行
+        
+        print(f"⏳ 正在监听 Telegram 消息 (超时: {timeout}s)...")
         
         while time.time() < deadline:
             try:
@@ -104,16 +123,19 @@ class Telegram:
                     offset = upd["update_id"] + 1
                     msg = upd.get("message") or {}
                     chat = msg.get("chat") or {}
+                    # 严格校验发送者 ID
                     if str(chat.get("id")) != str(self.chat_id):
                         continue
                     
                     text = (msg.get("text") or "").strip()
                     m = pattern.match(text)
                     if m:
-                        return m.group(1)
+                        code = m.group(1)
+                        print(f"✅ 收到验证码: {code}")
+                        return code
             
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ 监听消息异常: {e}")
             
             time.sleep(2)
         
@@ -149,6 +171,7 @@ class SecretUpdater:
                 headers=headers, timeout=30
             )
             if r.status_code != 200:
+                print(f"❌ 获取公钥失败: {r.text}")
                 return False
             
             key_data = r.json()
@@ -162,9 +185,13 @@ class SecretUpdater:
                 json={"encrypted_value": base64.b64encode(encrypted).decode(), "key_id": key_data['key_id']},
                 timeout=30
             )
-            return r.status_code in [201, 204]
+            if r.status_code in [201, 204]:
+                return True
+            else:
+                print(f"❌ 更新 Secret 失败: {r.text}")
+                return False
         except Exception as e:
-            print(f"更新 Secret 失败: {e}")
+            print(f"❌ 更新 Secret 异常: {e}")
             return False
 
 
@@ -653,6 +680,8 @@ class AutoLogin:
     
     def notify(self, ok, err=""):
         if not self.tg.ok:
+            # 即使没配置 Telegram，也在日志打印结果
+            print("⚠️ Telegram 未配置，跳过发送通知")
             return
         
         region_info = f"\n<b>区域:</b> {self.detected_region or '默认'}" if self.detected_region else ""
