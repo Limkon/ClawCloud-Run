@@ -2,7 +2,7 @@ name: ClawCloud 自动登录保活
 
 on:
   schedule:
-    - cron: '0 1 */5 * *'  # UTC 1:00，每5天运行
+    - cron: '0 1 */5 * *'
   workflow_dispatch:
 
 jobs:
@@ -14,14 +14,22 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      # ✅ 新增步骤：在配置 Python 前，先自动生成 requirements.txt
+      - name: 生成依赖文件
+        run: |
+          echo "playwright" > requirements.txt
+          echo "requests" >> requirements.txt
+          echo "pynacl" >> requirements.txt
+
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip' # ✅ 现在文件已经存在了，缓存功能就能正常工作了
 
       - name: 安装依赖
         run: |
-          pip install playwright requests pynacl
+          pip install -r requirements.txt
           playwright install chromium
           playwright install-deps
 
